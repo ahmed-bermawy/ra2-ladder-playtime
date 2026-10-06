@@ -1,0 +1,7 @@
+# Personal account list
+.env
+
+# Saved playtime data (remove this line if you want to commit your history)
+ra2-playtime-data*.json
+
+.DS_Store
