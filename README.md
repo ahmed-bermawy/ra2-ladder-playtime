@@ -2,7 +2,15 @@
 
 See how much time you play **Red Alert 2 on [Chrono Divide](https://ladder.chronodivide.com)** every day, per account, region and game mode.
 
-It's a single `index.html` file with no build step, no server and nothing to install. Open it in a browser and it works.
+It's plain HTML, CSS and JavaScript with no build step, no server and nothing to install. Open `index.html` in a browser and it works.
+
+```
+index.html      page layout
+css/style.css   styles (light and dark theme)
+js/app.js       fetching, storage, chart and tables
+favicon.ico
+.env.example    template for your account list
+```
 
 ## How it works
 
