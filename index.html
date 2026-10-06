@@ -121,8 +121,23 @@
   .tile .v { font-size: 24px; font-weight: 700; margin-top: 2px; }
   .tile .n { font-size: 12px; color: var(--text-muted); }
 
-  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-bottom: 8px; font-size: 13px; color: var(--text-secondary); }
-  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend { margin-bottom: 12px; overflow-x: auto; }
+  .legend table { width: auto; }
+  .legend th, .legend td { padding: 4px 12px 4px 0; border-bottom: 0; }
+  .legend thead th { font-size: 12px; color: var(--text-muted); font-weight: 600; }
+  .legend tfoot td { border-top: 1px solid var(--grid); color: var(--text-secondary); font-weight: 600; padding-top: 6px; }
+  .legend .rl { color: var(--text-primary); }
+  .legend .rs { color: var(--text-secondary); }
+  .legend .tot { color: var(--text-secondary); }
+  .lcell {
+    display: inline-flex; align-items: center; gap: 6px;
+    border: 0; background: none; padding: 2px 6px; margin-left: -6px; border-radius: 4px;
+    font: inherit; font-variant-numeric: tabular-nums; color: var(--text-primary); cursor: pointer;
+  }
+  .lcell:hover { background: var(--wash); }
+  .lcell[aria-pressed="false"] { color: var(--text-muted); text-decoration: line-through; }
+  .lcell[aria-pressed="false"] .sw { background: transparent !important; box-shadow: inset 0 0 0 1.5px var(--text-muted); }
+  .legend .hint { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
   .sw { width: 10px; height: 10px; border-radius: 3px; display: inline-block; flex: none; }
   #chart { position: relative; width: 100%; }
   #chart svg { display: block; width: 100%; }
@@ -228,8 +243,8 @@
 
   // ---------- constants ----------
   const REGIONS = {
-    'sea':   { label: 'South-East Asia',  short: 'SEA',   base: 'https://wol-sea.chronodivide.com' },
-    'am-eu': { label: 'America & Europe', short: 'AM-EU', base: 'https://wol-eu.chronodivide.com' },
+    'sea':   { label: 'South-East Asia',  base: 'https://wol-sea.chronodivide.com' },
+    'am-eu': { label: 'America & Europe', base: 'https://wol-eu.chronodivide.com' },
   };
   const MODES = { '1v1': '1v1', '2v2-random': '2v2' };
   const ENV_KEYS = {
@@ -257,7 +272,7 @@
   } catch { /* ignore */ }
   let unsaved = Number(store.get(LS_UNSAVED)) || 0;
   let fileHandle = null;
-  const view = { range: '30', account: '', region: '', mode: '', groupBy: 'combo' };
+  const view = { range: '30', account: '', region: '', mode: '', groupBy: 'combo', hidden: new Set() };
 
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -289,7 +304,7 @@
   function showEnvParsed() {
     const { accounts, unknown } = parseEnv($('envText').value);
     let txt = accounts.length
-      ? accounts.map((a) => `${a.name} (${REGIONS[a.region].short})`).join(', ')
+      ? accounts.map((a) => `${a.name} (${REGIONS[a.region].label})`).join(', ')
       : 'No accounts found yet.';
     if (unknown.length) txt += ` · ignored keys: ${unknown.join(', ')}`;
     $('envParsed').textContent = txt;
@@ -312,7 +327,7 @@
       if (cursor) params.set('cursor', cursor);
       const res = await fetch(`${REGIONS[region].base}/api/v1/games?${params}`);
       if (res.status === 404) return { added, notFound: pages === 0 };
-      if (!res.ok) throw new Error(`HTTP ${res.status} for ${name} (${REGIONS[region].short})`);
+      if (!res.ok) throw new Error(`HTTP ${res.status} for ${name} (${REGIONS[region].label})`);
       const page = await res.json();
       pages++;
       let reachedKnown = false;
@@ -355,7 +370,7 @@
     const notes = [];
     try {
       for (const a of accounts) {
-        const tag = `${a.name} (${REGIONS[a.region].short})`;
+        const tag = `${a.name} (${REGIONS[a.region].label})`;
         setStatus(`Fetching ${tag}…`);
         const r = await fetchAccount(a.region, a.name, (p, n) => setStatus(`Fetching ${tag}… page ${p}, ${n} new games`));
         total += r.added;
@@ -446,7 +461,17 @@
       case 'account': return g.account;
       case 'region': return REGIONS[g.region] ? REGIONS[g.region].label : g.region;
       case 'mode': return modeLabel(g.mode);
-      default: return `${g.account} · ${REGIONS[g.region] ? REGIONS[g.region].short : g.region} · ${modeLabel(g.mode)}`;
+      default: return `${g.account} · ${REGIONS[g.region] ? REGIONS[g.region].label : g.region} · ${modeLabel(g.mode)}`;
+    }
+  }
+
+  // Where a series sits in the legend table: one row per account·region, one column per mode.
+  function legendCell(g, by) {
+    switch (by) {
+      case 'account': return { row: g.account, label: g.account, col: '' };
+      case 'region': return { row: g.region, label: REGIONS[g.region] ? REGIONS[g.region].label : g.region, col: '' };
+      case 'mode': return { row: g.mode, label: modeLabel(g.mode), col: '' };
+      default: return { row: `${g.account}|${g.region}`, label: g.account, sub: REGIONS[g.region] ? REGIONS[g.region].label : g.region, col: g.mode };
     }
   }
 
@@ -526,9 +551,11 @@
     // day -> series -> seconds
     const byDay = new Map(days.map((d) => [d, new Map()]));
     const seriesTotals = new Map();
+    const cells = new Map();
     for (const g of games) {
       const d = dayKey(new Date(g.startedAt));
       const s = colors.resolve(seriesKey(g, view.groupBy));
+      if (!cells.has(s)) cells.set(s, s === 'Other' ? { row: 'Other', label: 'Other', col: null } : legendCell(g, view.groupBy));
       const m = byDay.get(d);
       m.set(s, (m.get(s) || 0) + g.durationSeconds);
       seriesTotals.set(s, (seriesTotals.get(s) || 0) + g.durationSeconds);
@@ -536,8 +563,8 @@
     const series = colors.order.filter((s) => seriesTotals.has(s));
 
     renderTiles(games, days, byDay);
-    renderLegend(series, colors.map, seriesTotals);
-    renderChart(days, byDay, series, colors.map);
+    renderLegend(series, colors.map, seriesTotals, cells);
+    renderChart(days, byDay, series.filter((s) => !view.hidden.has(s)), colors.map);
     renderBreakdown(games, days.length);
     renderDaily(days, byDay, series, colors.map);
   }
@@ -560,10 +587,39 @@
       `<div class="tile"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div><div class="n">${esc(n)}</div></div>`).join('');
   }
 
-  function renderLegend(series, cmap, totals) {
-    $('legend').innerHTML = series.length > 1
-      ? series.map((s) => `<span><i class="sw" style="background:${cmap.get(s)}"></i>${esc(s)} · ${fmtDur(totals.get(s))}</span>`).join('')
-      : '';
+  function renderLegend(series, cmap, totals, cells) {
+    if (series.length < 2) { $('legend').innerHTML = ''; return; }
+    const modeOrder = [...Object.keys(MODES)];
+    const cols = [...new Set([...cells.values()].map((c) => c.col).filter((c) => c !== null))]
+      .sort((a, b) => (modeOrder.indexOf(a) + 1 || 99) - (modeOrder.indexOf(b) + 1 || 99) || a.localeCompare(b));
+    const rows = new Map();
+    for (const s of series) {
+      const c = cells.get(s);
+      if (!rows.has(c.row)) rows.set(c.row, { label: c.label, sub: c.sub, items: new Map(), other: null, total: 0 });
+      const r = rows.get(c.row);
+      if (c.col === null) r.other = s; else r.items.set(c.col, s);
+      r.total += totals.get(s);
+    }
+    const rowList = [...rows.values()].sort((a, b) => (a.label === 'Other') - (b.label === 'Other') || b.total - a.total);
+    const btn = (s) => `<button type="button" class="lcell" data-s="${esc(s)}" aria-pressed="${!view.hidden.has(s)}" title="Show or hide in the chart">` +
+      `<i class="sw" style="background:${cmap.get(s)}"></i>${fmtDur(totals.get(s))}</button>`;
+    const showTotal = cols.length > 1;
+    const hasRegion = view.groupBy === 'combo';
+    const firstHead = { account: 'Account', region: 'Region', mode: 'Mode' }[view.groupBy] || 'Account';
+    const head = `<thead><tr><th>${firstHead}</th>${hasRegion ? '<th>Region</th>' : ''}${cols.map((c) => `<th>${c ? esc(modeLabel(c)) : 'Time'}</th>`).join('')}${showTotal ? '<th class="num">Total</th>' : ''}</tr></thead>`;
+    const body = rowList.map((r) =>
+      `<tr><td class="rl">${esc(r.label)}</td>${hasRegion ? `<td class="rs">${esc(r.sub || '')}</td>` : ''}` +
+      (r.other
+        ? `<td colspan="${cols.length}">${btn(r.other)}</td>`
+        : cols.map((c) => `<td>${r.items.has(c) ? btn(r.items.get(c)) : ''}</td>`).join('')) +
+      (showTotal ? `<td class="num tot">${fmtDur(r.total)}</td>` : '') + '</tr>').join('');
+    let foot = '';
+    if (rowList.length > 1) {
+      const colTot = cols.map((c) => series.filter((s) => cells.get(s).col === c).reduce((a, s) => a + totals.get(s), 0));
+      const grand = series.reduce((a, s) => a + totals.get(s), 0);
+      foot = `<tfoot><tr><td${hasRegion ? ' colspan="2"' : ''}>Total</td>${colTot.map((t) => `<td>${fmtDur(t)}</td>`).join('')}${showTotal ? `<td class="num">${fmtDur(grand)}</td>` : ''}</tr></tfoot>`;
+    }
+    $('legend').innerHTML = `<table>${head}<tbody>${body}</tbody>${foot}</table><div class="hint">Click a time to hide or show it in the chart.</div>`;
   }
 
   function niceStepMinutes(maxMin) {
@@ -583,9 +639,10 @@
     host.querySelectorAll('svg, .empty').forEach((n) => n.remove());
     tip.style.display = 'none';
 
-    const totals = days.map((d) => [...byDay.get(d).values()].reduce((a, b) => a + b, 0));
+    const totals = days.map((d) => series.reduce((a, s) => a + (byDay.get(d).get(s) || 0), 0));
     if (!days.length || !totals.some((t) => t > 0)) {
-      host.insertAdjacentHTML('afterbegin', '<div class="empty">No games in this range.</div>');
+      const anyData = days.some((d) => byDay.get(d).size);
+      host.insertAdjacentHTML('afterbegin', `<div class="empty">${anyData ? 'Everything is hidden. Click a time above to show it.' : 'No games in this range.'}</div>`);
       return;
     }
 
@@ -735,7 +792,14 @@
   $('fAccount').addEventListener('change', (e) => { view.account = e.target.value; render(); });
   $('fRegion').addEventListener('change', (e) => { view.region = e.target.value; render(); });
   $('fMode').addEventListener('change', (e) => { view.mode = e.target.value; render(); });
-  $('groupBy').addEventListener('change', (e) => { view.groupBy = e.target.value; render(); });
+  $('groupBy').addEventListener('change', (e) => { view.groupBy = e.target.value; view.hidden.clear(); render(); });
+  $('legend').addEventListener('click', (ev) => {
+    const b = ev.target.closest('.lcell');
+    if (!b) return;
+    const s = b.dataset.s;
+    if (view.hidden.has(s)) view.hidden.delete(s); else view.hidden.add(s);
+    render();
+  });
   let rt;
   window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(render, 150); });
 
